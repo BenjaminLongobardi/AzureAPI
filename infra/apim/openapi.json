@@ -1,0 +1,19 @@
+{
+  "openapi": "3.0.1",
+  "info": {
+    "title": "Hello API",
+    "version": "1.0.0"
+  },
+  "paths": {
+    "/": {
+      "get": {
+        "operationId": "get-root",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,72 @@
+name: Deploy Function Code
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - 'src/**'
+      - '.github/workflows/deploy-function.yml'
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    runs-on:
+      - self-hosted
+      - azure-vnet
+    env:
+      AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Resolve function app name
+        id: resolve_name
+        shell: pwsh
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:AZURE_RESOURCE_GROUP)) {
+            throw 'Missing required GitHub repo variable: AZURE_RESOURCE_GROUP'
+          }
+
+          $functionName = az resource list `
+            --resource-group $env:AZURE_RESOURCE_GROUP `
+            --resource-type Microsoft.Web/sites `
+            --query "[?contains(kind,'functionapp')].name | [0]" `
+            -o tsv
+
+          if ([string]::IsNullOrWhiteSpace($functionName)) {
+            throw "No Function App found in resource group '$env:AZURE_RESOURCE_GROUP'. Deploy infra first."
+          }
+
+          "FUNCTION_APP_NAME=$functionName" >> $env:GITHUB_ENV
+
+      - name: Package function app
+        shell: pwsh
+        run: |
+          $source = Join-Path $PWD 'src\HelloFunction\*'
+          $zipPath = Join-Path $PWD 'functionapp.zip'
+
+          if (Test-Path $zipPath) {
+            Remove-Item $zipPath -Force
+          }
+
+          Compress-Archive -Path $source -DestinationPath $zipPath -Force
+
+      - name: Deploy ZIP package
+        shell: pwsh
+        run: |
+          az functionapp deployment source config-zip `
+            --resource-group $env:AZURE_RESOURCE_GROUP `
+            --name $env:FUNCTION_APP_NAME `
+            --src functionapp.zip

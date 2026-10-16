@@ -1,0 +1,112 @@
+name: Deploy Azure Infrastructure
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - 'infra/**'
+      - '.github/workflows/deploy-infra.yml'
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+      AZURE_LOCATION: ${{ vars.AZURE_LOCATION }}
+      WORKLOAD_NAME: ${{ vars.WORKLOAD_NAME }}
+      APIM_PUBLISHER_EMAIL: ${{ vars.APIM_PUBLISHER_EMAIL }}
+      APIM_PUBLISHER_NAME: ${{ vars.APIM_PUBLISHER_NAME }}
+      TFSTATE_RESOURCE_GROUP: ${{ vars.TFSTATE_RESOURCE_GROUP }}
+      TFSTATE_STORAGE_ACCOUNT: ${{ vars.TFSTATE_STORAGE_ACCOUNT }}
+      TFSTATE_CONTAINER: ${{ vars.TFSTATE_CONTAINER }}
+      TFSTATE_KEY: ${{ vars.TFSTATE_KEY }}
+      ARM_USE_OIDC: true
+      ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Validate required variables
+        shell: pwsh
+        run: |
+          $required = @(
+            'AZURE_RESOURCE_GROUP',
+            'AZURE_LOCATION',
+            'WORKLOAD_NAME',
+            'APIM_PUBLISHER_EMAIL',
+            'APIM_PUBLISHER_NAME',
+            'TFSTATE_RESOURCE_GROUP',
+            'TFSTATE_STORAGE_ACCOUNT',
+            'TFSTATE_CONTAINER',
+            'TFSTATE_KEY'
+          )
+
+          $missing = @()
+          foreach ($name in $required) {
+            if ([string]::IsNullOrWhiteSpace((Get-Item "env:$name").Value)) {
+              $missing += $name
+            }
+          }
+
+          if ($missing.Count -gt 0) {
+            throw "Missing required GitHub repo variables: $($missing -join ', ')"
+          }
+
+      - name: Ensure Terraform state container exists
+        shell: pwsh
+        run: |
+          az storage container create `
+            --name $env:TFSTATE_CONTAINER `
+            --account-name $env:TFSTATE_STORAGE_ACCOUNT `
+            --auth-mode login `
+            --public-access off
+
+      - name: Terraform init
+        working-directory: infra
+        shell: pwsh
+        run: |
+          terraform init `
+            -backend-config="resource_group_name=$env:TFSTATE_RESOURCE_GROUP" `
+            -backend-config="storage_account_name=$env:TFSTATE_STORAGE_ACCOUNT" `
+            -backend-config="container_name=$env:TFSTATE_CONTAINER" `
+            -backend-config="key=$env:TFSTATE_KEY"
+
+      - name: Terraform plan
+        working-directory: infra
+        shell: pwsh
+        run: |
+          terraform plan `
+            -out=tfplan `
+            -var="resource_group_name=$env:AZURE_RESOURCE_GROUP" `
+            -var="location=$env:AZURE_LOCATION" `
+            -var="workload_name=$env:WORKLOAD_NAME" `
+            -var="apim_publisher_email=$env:APIM_PUBLISHER_EMAIL" `
+            -var="apim_publisher_name=$env:APIM_PUBLISHER_NAME"
+
+      - name: Terraform apply
+        working-directory: infra
+        shell: pwsh
+        run: terraform apply -auto-approve tfplan
+
+      - name: Show outputs
+        working-directory: infra
+        shell: pwsh
+        run: terraform output

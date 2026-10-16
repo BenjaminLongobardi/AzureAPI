@@ -1,0 +1,7 @@
+resource_group_name   = "rg-azureapi-private"
+location              = "eastus"
+workload_name         = "azureapi"
+apim_publisher_email  = "api-owner@example.com"
+apim_publisher_name   = "Contoso"
+apim_sku_name         = "Developer"
+apim_sku_capacity     = 1
